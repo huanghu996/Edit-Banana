@@ -206,7 +206,11 @@
     .progress-wrap {
       display: none;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
     }
     .progress-wrap.visible { display: flex; }
     .progress-label {
@@ -214,27 +218,69 @@
       color: var(--text-muted);
       display: flex;
       justify-content: space-between;
+      align-items: center;
     }
-    .progress-bar-bg {
+    .stage-count { color: var(--yellow); font-weight: 700; font-size: 15px; }
+
+    /* Segmented bar */
+    .progress-segments {
+      display: flex;
+      gap: 4px;
+    }
+    .progress-segment {
+      flex: 1;
       height: 6px;
+      border-radius: 3px;
       background: var(--surface2);
-      border-radius: 99px;
+      transition: background 0.4s;
+    }
+    .progress-segment.done   { background: var(--green); }
+    .progress-segment.active { background: var(--yellow); animation: seg-pulse 1s ease-in-out infinite; }
+    @keyframes seg-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.5; }
+    }
+
+    /* Stage list */
+    .stages-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .stage-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+    }
+    .stage-icon {
+      width: 18px; height: 18px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700;
+    }
+    .stage-icon.done    { background: var(--green);   color: #fff; }
+    .stage-icon.active  { background: var(--yellow);  color: #1a1400; animation: seg-pulse 1s infinite; }
+    .stage-icon.pending { background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); }
+    .stage-label        { flex: 1; }
+    .stage-label.done   { color: var(--text); }
+    .stage-label.active { color: var(--yellow); font-weight: 600; }
+    .stage-label.pending{ color: var(--text-muted); }
+    .stage-time         { font-size: 12px; color: var(--text-muted); min-width: 48px; text-align: right; font-family: 'JetBrains Mono', monospace; }
+    .stage-time.done    { color: var(--green); }
+    .stage-time.active  { color: var(--yellow); }
+
+    .progress-detail {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      white-space: nowrap;
       overflow: hidden;
-    }
-    .progress-bar {
-      height: 100%;
-      background: var(--yellow);
-      border-radius: 99px;
-      width: 0%;
-      transition: width 0.3s ease;
-    }
-    .progress-bar.indeterminate {
-      width: 40%;
-      animation: slide 1.2s ease-in-out infinite;
-    }
-    @keyframes slide {
-      0%   { margin-left: -40%; }
-      100% { margin-left: 100%; }
+      text-overflow: ellipsis;
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+      margin-top: 2px;
     }
 
     /* Result */
@@ -353,11 +399,12 @@
   <!-- Progress -->
   <div class="progress-wrap" id="progressWrap">
     <div class="progress-label">
-      <span id="progressLabel">Converting…</span>
+      <span id="progressLabel">处理中...</span>
+      <span id="progressTimer">0s</span>
     </div>
-    <div class="progress-bar-bg">
-      <div class="progress-bar indeterminate" id="progressBar"></div>
-    </div>
+    <div class="progress-segments" id="progressSegments"></div>
+    <div class="stages-list"     id="stagesList"></div>
+    <div class="progress-detail" id="progressDetail"></div>
   </div>
 
   <!-- Result -->
@@ -373,28 +420,173 @@
 </main>
 
 <script>
-  const dropZone    = document.getElementById('dropZone');
-  const fileInput   = document.getElementById('fileInput');
-  const previewRow  = document.getElementById('previewRow');
-  const previewImg  = document.getElementById('previewImg');
-  const previewName = document.getElementById('previewName');
-  const infoName    = document.getElementById('infoName');
-  const infoSize    = document.getElementById('infoSize');
-  const convertBtn  = document.getElementById('convertBtn');
-  const clearBtn    = document.getElementById('clearBtn');
+  const dropZone     = document.getElementById('dropZone');
+  const fileInput    = document.getElementById('fileInput');
+  const previewRow   = document.getElementById('previewRow');
+  const previewImg   = document.getElementById('previewImg');
+  const previewName  = document.getElementById('previewName');
+  const infoName     = document.getElementById('infoName');
+  const infoSize     = document.getElementById('infoSize');
+  const convertBtn   = document.getElementById('convertBtn');
+  const clearBtn     = document.getElementById('clearBtn');
   const progressWrap = document.getElementById('progressWrap');
-  const progressBar  = document.getElementById('progressBar');
-  const progressLabel = document.getElementById('progressLabel');
-  const resultCard  = document.getElementById('resultCard');
-  const resultStatus = document.getElementById('resultStatus');
-  const resultDot   = document.getElementById('resultDot');
-  const resultTitle = document.getElementById('resultTitle');
-  const resultBody  = document.getElementById('resultBody');
+  const progressLabel  = document.getElementById('progressLabel');
+  const progressTimer  = document.getElementById('progressTimer');
+  const progressDetail = document.getElementById('progressDetail');
+  const resultCard   = document.getElementById('resultCard');
+  const resultDot    = document.getElementById('resultDot');
+  const resultTitle  = document.getElementById('resultTitle');
+  const resultBody   = document.getElementById('resultBody');
 
   let selectedFile = null;
   let resultBlob = null;
   let resultFilename = 'output.xml';
+  let _statusPoller = null;
+  let _timerInterval = null;
+  let _startTime = null;
 
+  // ── Stage tracking ──────────────────────────────────────────────────────────
+  const STAGES = [
+    { key: '预处理 Preprocess', label: '预处理 Preprocess' },
+    { key: '文字识别 OCR',      label: '文字识别 OCR' },
+    { key: '图形分割 SAM3',     label: '图形分割 SAM3' },
+    { key: '图形处理 Shape',    label: '图形处理 Shape' },
+    { key: '生成XML片段',       label: '生成XML片段' },
+    { key: '合并XML Merge',     label: '合并XML Merge' },
+  ];
+
+  let _stageStatus = [];   // 'pending' | 'active' | 'done'
+  let _stageStart  = [];   // timestamp or null
+  let _stageEnd    = [];   // timestamp or null
+  let _currentIdx  = -1;
+
+  function initStages() {
+    _stageStatus = STAGES.map(() => 'pending');
+    _stageStart  = STAGES.map(() => null);
+    _stageEnd    = STAGES.map(() => null);
+    _currentIdx  = -1;
+    renderStages();
+  }
+
+  function activateStage(idx) {
+    if (idx < 0 || idx >= STAGES.length || idx === _currentIdx) return;
+    const now = Date.now();
+    // Mark all stages before idx as done (including when jumping from -1)
+    for (let i = 0; i < idx; i++) {
+      if (_stageStatus[i] !== 'done') {
+        _stageStatus[i] = 'done';
+        if (!_stageStart[i]) _stageStart[i] = now;
+        if (!_stageEnd[i])   _stageEnd[i]   = now;
+      }
+    }
+    // Mark current as done if switching away
+    if (_currentIdx >= 0 && _stageStatus[_currentIdx] === 'active') {
+      _stageStatus[_currentIdx] = 'done';
+      _stageEnd[_currentIdx] = now;
+    }
+    _currentIdx = idx;
+    _stageStatus[idx] = 'active';
+    _stageStart[idx] = now;
+    renderStages();
+  }
+
+  function completeAllStages() {
+    const now = Date.now();
+    for (let i = 0; i < STAGES.length; i++) {
+      if (_stageStatus[i] !== 'done') {
+        _stageStatus[i] = 'done';
+        if (!_stageStart[i]) _stageStart[i] = now;
+        if (!_stageEnd[i])   _stageEnd[i]   = now;
+      }
+    }
+    _currentIdx = -1;
+    renderStages();
+  }
+
+  function renderStages() {
+    const segs = document.getElementById('progressSegments');
+    const list = document.getElementById('stagesList');
+    if (!segs || !list) return;
+
+    const doneCount = _stageStatus.filter(s => s === 'done').length;
+    progressLabel.innerHTML = `处理进度 <span class="stage-count">${doneCount} / ${STAGES.length}</span>`;
+
+    // Segmented bar
+    segs.innerHTML = '';
+    STAGES.forEach((_, i) => {
+      const seg = document.createElement('div');
+      seg.className = 'progress-segment ' + _stageStatus[i];
+      segs.appendChild(seg);
+    });
+
+    // Stage rows
+    list.innerHTML = '';
+    STAGES.forEach((stage, i) => {
+      const st = _stageStatus[i];
+      const row = document.createElement('div');
+      row.className = 'stage-row';
+
+      const icon = document.createElement('div');
+      icon.className = 'stage-icon ' + st;
+      icon.textContent = st === 'done' ? '✓' : st === 'active' ? '●' : '○';
+
+      const label = document.createElement('div');
+      label.className = 'stage-label ' + st;
+      label.textContent = stage.label;
+
+      const time = document.createElement('div');
+      time.className = 'stage-time ' + st;
+      time.id = 'stage-time-' + i;
+      if (st === 'done' && _stageStart[i] && _stageEnd[i]) {
+        time.textContent = ((_stageEnd[i] - _stageStart[i]) / 1000).toFixed(1) + 's';
+      } else if (st === 'active' && _stageStart[i]) {
+        time.textContent = ((Date.now() - _stageStart[i]) / 1000).toFixed(1) + 's';
+      }
+
+      row.appendChild(icon);
+      row.appendChild(label);
+      row.appendChild(time);
+      list.appendChild(row);
+    });
+  }
+
+  function updateActiveTimer() {
+    if (_currentIdx < 0 || !_stageStart[_currentIdx]) return;
+    const el = document.getElementById('stage-time-' + _currentIdx);
+    if (el) el.textContent = ((Date.now() - _stageStart[_currentIdx]) / 1000).toFixed(1) + 's';
+  }
+
+  // ── Polling ─────────────────────────────────────────────────────────────────
+  function startPolling() {
+    _startTime = Date.now();
+    initStages();
+
+    _timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - _startTime) / 1000);
+      const m = Math.floor(elapsed / 60), s = elapsed % 60;
+      progressTimer.textContent = m > 0 ? `${m}m ${s}s` : `${s}s`;
+      updateActiveTimer();
+    }, 1000);
+
+    _statusPoller = setInterval(async () => {
+      try {
+        const res = await fetch('/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const idx = STAGES.findIndex(s => s.key === data.step);
+        if (idx >= 0) activateStage(idx);
+        if (data.step === '完成') completeAllStages();
+        if (data.message) progressDetail.textContent = data.message;
+      } catch {}
+    }, 1500);
+  }
+
+  function stopPolling() {
+    if (_statusPoller)  { clearInterval(_statusPoller);  _statusPoller = null; }
+    if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  }
+
+  // ── File handling ────────────────────────────────────────────────────────────
   function formatBytes(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -403,8 +595,7 @@
 
   function setFile(file) {
     selectedFile = file;
-    const url = URL.createObjectURL(file);
-    previewImg.src = url;
+    previewImg.src = URL.createObjectURL(file);
     previewName.textContent = file.name;
     infoName.textContent = file.name;
     infoSize.textContent = formatBytes(file.size);
@@ -415,73 +606,59 @@
   }
 
   function clearAll() {
-    selectedFile = null;
-    resultBlob = null;
-    fileInput.value = '';
+    selectedFile = null; resultBlob = null; fileInput.value = '';
     previewRow.classList.remove('visible');
     progressWrap.classList.remove('visible');
     resultCard.classList.remove('visible');
   }
 
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) setFile(fileInput.files[0]);
-  });
-
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
   dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) setFile(file);
+    e.preventDefault(); dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
   });
-
   clearBtn.addEventListener('click', clearAll);
 
   convertBtn.addEventListener('click', async () => {
     if (!selectedFile) return;
-
     convertBtn.disabled = true;
     progressWrap.classList.add('visible');
-    progressBar.classList.add('indeterminate');
-    progressLabel.textContent = 'Uploading and converting…';
+    progressDetail.textContent = '';
+    progressTimer.textContent = '0s';
     resultCard.classList.remove('visible');
+    startPolling();
 
     const formData = new FormData();
     formData.append('file', selectedFile);
 
     try {
       const res = await fetch('/convert', { method: 'POST', body: formData });
-
-      progressBar.classList.remove('indeterminate');
-      progressBar.style.width = '100%';
+      stopPolling();
+      completeAllStages();
 
       if (!res.ok) {
         let errMsg = `HTTP ${res.status}`;
         try { const j = await res.json(); errMsg = j.detail || JSON.stringify(j); } catch {}
-        showError(errMsg);
-        return;
+        showError(errMsg); return;
       }
 
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('xml') || contentType.includes('octet-stream')) {
-        // File download response
         resultBlob = await res.blob();
-        const disposition = res.headers.get('content-disposition') || '';
-        const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-        if (match) resultFilename = match[1].replace(/['"]/g, '');
-        else resultFilename = selectedFile.name.replace(/\.[^.]+$/, '') + '.xml';
-        const text = await resultBlob.text();
-        showSuccess(text);
+        const disp = res.headers.get('content-disposition') || '';
+        const m = disp.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        resultFilename = m ? m[1].replace(/['"]/g, '') : selectedFile.name.replace(/\.[^.]+$/, '') + '.xml';
+        showSuccess(await resultBlob.text());
       } else {
-        // JSON response with output_path
         const json = await res.json();
         resultBlob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
         resultFilename = selectedFile.name.replace(/\.[^.]+$/, '') + '_result.json';
         showSuccess(JSON.stringify(json, null, 2));
       }
     } catch (err) {
-      progressBar.classList.remove('indeterminate');
+      stopPolling();
       showError(err.message || 'Network error');
     } finally {
       convertBtn.disabled = false;
@@ -490,20 +667,11 @@
 
   function openInDrawio(xmlText) {
     try {
-      // draw.io encoding: encodeURIComponent the XML first, then deflateRaw, then base64
-      // This matches draw.io's Graph.compress() / Graph.decompress() format exactly.
       const compressed = pako.deflateRaw(encodeURIComponent(xmlText));
-      let binaryStr = '';
-      for (let i = 0; i < compressed.length; i++) {
-        binaryStr += String.fromCharCode(compressed[i]);
-      }
-      const encoded = btoa(binaryStr);
-      // 'R' prefix = raw inline data. Without it draw.io treats the fragment as a URL
-      // and routes it through their proxy service (which fails on intranets).
-      window.open('https://app.diagrams.net/#R' + encoded, '_blank');
-    } catch (e) {
-      alert('Failed to open in draw.io: ' + e.message);
-    }
+      let bin = '';
+      for (let i = 0; i < compressed.length; i++) bin += String.fromCharCode(compressed[i]);
+      window.open('https://app.diagrams.net/#R' + btoa(bin), '_blank');
+    } catch (e) { alert('Failed to open in draw.io: ' + e.message); }
   }
 
   function showSuccess(text) {
@@ -525,10 +693,7 @@
     dlBtn.innerHTML = '⬇ Download XML';
     dlBtn.addEventListener('click', () => {
       const url = URL.createObjectURL(resultBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = resultFilename;
-      a.click();
+      const a = document.createElement('a'); a.href = url; a.download = resultFilename; a.click();
       URL.revokeObjectURL(url);
     });
     actions.appendChild(dlBtn);
@@ -545,12 +710,10 @@
     copyBtn.className = 'btn btn-ghost';
     copyBtn.textContent = 'Copy to clipboard';
     copyBtn.addEventListener('click', () => {
-      resultBlob.text().then(t => {
-        navigator.clipboard.writeText(t).then(() => {
-          copyBtn.textContent = 'Copied!';
-          setTimeout(() => copyBtn.textContent = 'Copy to clipboard', 2000);
-        });
-      });
+      resultBlob.text().then(t => navigator.clipboard.writeText(t).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => copyBtn.textContent = 'Copy to clipboard', 2000);
+      }));
     });
     actions.appendChild(copyBtn);
 

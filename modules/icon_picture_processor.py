@@ -17,6 +17,7 @@ import os
 import io
 import base64
 from typing import Optional, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 import numpy as np
 import cv2
@@ -161,43 +162,43 @@ class RMBGModel(ModelWrapper):
         """Background removal; fallback to CPU if GPU fails. Returns RGBA PIL."""
         if not self._is_loaded:
             self.load()
-        
+
         # Model not loaded: return fallback
         if self._session is None:
             return image.convert("RGBA")
-        
+
         # To numpy
         img = np.array(image)
-        
+
         # Preprocess
         img_input, original_size = self._preprocess(img)
-        
+
         try:
             pred = self._session.run([self._output_name], {self._input_name: img_input})[0]
         except Exception as e:
             # GPU failed, try CPU
             if hasattr(self, '_providers') and 'CUDAExecutionProvider' in self._providers:
                 print(f"[RMBGModel] GPU inference failed (OOM), switching to CPU...")
-                
+
                 try:
                     # Release session
                     self._session = None
-                    
+
                     # New CPU session
                     session_options = ort.SessionOptions()
                     session_options.log_severity_level = 3
-                    
+
                     self._session = ort.InferenceSession(
                         self.model_path,
                         providers=['CPUExecutionProvider'],
                         sess_options=session_options
                     )
                     self._providers = ['CPUExecutionProvider']
-                    
+
                     # Retry
                     pred = self._session.run([self._output_name], {self._input_name: img_input})[0]
                     print("[RMBGModel] CPU inference successful")
-                    
+
                 except Exception as e2:
                     print(f"[RMBGModel] CPU inference also failed: {e2}")
                     print("[RMBGModel] Falling back to no background removal")
@@ -205,20 +206,74 @@ class RMBGModel(ModelWrapper):
             else:
                 print(f"[RMBGModel] Inference failed: {e}, using fallback (no background removal)")
                 return image.convert("RGBA")
-        
+
         # Postprocess alpha
         alpha = self._postprocess(pred, original_size)
-        
+
         # Merge alpha -> RGBA
         img_rgba = cv2.cvtColor(img, cv2.COLOR_RGB2RGBA)
         img_rgba[:, :, 3] = alpha
-        
+
         # To PIL
         return Image.fromarray(img_rgba)
-    
+
+    def predict_batch(self, images: List[Image.Image]) -> List[Image.Image]:
+        """Batch background removal - much faster on GPU. Returns list of RGBA PIL images."""
+        if not self._is_loaded:
+            self.load()
+
+        # Model not loaded: return fallbacks
+        if self._session is None:
+            return [img.convert("RGBA") for img in images]
+
+        if not images:
+            return []
+
+        batch_size = len(images)
+
+        # Preprocess all images
+        processed_inputs = []
+        original_sizes = []
+        np_images = []
+
+        for img in images:
+            np_img = np.array(img)
+            np_images.append(np_img)
+            inp, orig_size = self._preprocess(np_img)
+            processed_inputs.append(inp)
+            original_sizes.append(orig_size)
+
+        # Concatenate into batch [B, C, H, W]
+        batch_input = np.concatenate(processed_inputs, axis=0)
+
+        try:
+            # Run batch inference
+            preds = self._session.run([self._output_name], {self._input_name: batch_input})[0]
+        except Exception as e:
+            print(f"[RMBGModel] Batch inference failed: {e}, falling back to single mode")
+            # Fallback to single processing
+            return [self.predict(img) for img in images]
+
+        # Postprocess each result
+        results = []
+        for i, (np_img, orig_size) in enumerate(zip(np_images, original_sizes)):
+            pred = preds[i:i+1]  # Keep batch dim [1, 1, H, W]
+            alpha = self._postprocess(pred, orig_size)
+
+            # Merge alpha -> RGBA
+            img_rgba = cv2.cvtColor(np_img, cv2.COLOR_RGB2RGBA)
+            img_rgba[:, :, 3] = alpha
+            results.append(Image.fromarray(img_rgba))
+
+        return results
+
     def remove_background(self, image: Image.Image) -> Image.Image:
         """Alias for predict."""
         return self.predict(image)
+
+    def remove_background_batch(self, images: List[Image.Image]) -> List[Image.Image]:
+        """Alias for predict_batch."""
+        return self.predict_batch(images)
     
     def unload(self):
         """Release model resources."""
@@ -230,13 +285,13 @@ class IconPictureProcessor(BaseProcessor):
     """Process icon/picture elements: filter, crop, optional RMBG, base64, XML fragments."""
 
     # Types that use RMBG for background removal; others keep original crop
-    RMBG_TYPES = {"icon", "logo", "symbol", "emoji", "button", "arrow"}
-    
+    RMBG_TYPES = {"icon", "logo", "symbol", "emoji", "button"}
 
     # Types that keep background (crop only)
     KEEP_BG_TYPES = {
         "picture", "photo", "chart", "function_graph", "screenshot", "image", "diagram",
-        "graph", "line graph", "bar graph", "heatmap", "scatter plot", "histogram", "pie chart"
+        "graph", "line graph", "bar graph", "heatmap", "scatter plot", "histogram", "pie chart",
+        "arrow", "line", "connector",  # arrows are simple shapes, no RMBG needed
     }
     
     # Max element area ratio (skip if element area > this fraction of image)
@@ -274,33 +329,73 @@ class IconPictureProcessor(BaseProcessor):
                 success=False,
                 error_message="Invalid image path"
             )
-        
+
         original_image = Image.open(context.image_path).convert("RGB")
-        cv2_image = cv2.imread(context.image_path)
-        
+
         # Filter elements to process
         elements_to_process = self._get_elements_to_process(context.elements)
-        
-        self._log(f"Elements to process: {len(elements_to_process)}")
-        
+
+        total = len(elements_to_process)
+        self._log(f"Elements to process: {total}")
+
+        # Separate RMBG elements vs keep-bg elements
+        rmbg_elements = []
+        keepbg_elements = []
+        for elem in elements_to_process:
+            if elem.element_type.lower() in self.RMBG_TYPES:
+                rmbg_elements.append(elem)
+            else:
+                keepbg_elements.append(elem)
+
+        self._log(f"  RMBG (GPU): {len(rmbg_elements)}, Crop only: {len(keepbg_elements)}")
+
         processed_count = 0
         rmbg_count = 0
         keep_bg_count = 0
-        
-        for elem in elements_to_process:
-            try:
-                is_rmbg = self._process_element(elem, original_image)
-                processed_count += 1
-                if is_rmbg:
+
+        # Batch process RMBG elements (GPU efficient)
+        if rmbg_elements:
+            batch_size = 8  # GPU batch size
+            for batch_start in range(0, len(rmbg_elements), batch_size):
+                batch_end = min(batch_start + batch_size, len(rmbg_elements))
+                batch = rmbg_elements[batch_start:batch_end]
+                self._log(f"  RMBG batch {batch_start}-{batch_end}/{len(rmbg_elements)}...")
+
+                # Crop all images in batch
+                cropped_batch = []
+                for elem in batch:
+                    cropped = self._crop_element(elem, original_image)
+                    cropped_batch.append(cropped)
+
+                # Batch GPU inference
+                processed_batch = self._rmbg_model.remove_background_batch(cropped_batch)
+
+                # Assign results back
+                for elem, processed_img in zip(batch, processed_batch):
+                    elem.has_transparency = True
+                    elem.base64 = self._image_to_base64(processed_img)
+                    self._finalize_element(elem, processed_img)
+                    processed_count += 1
                     rmbg_count += 1
-                else:
-                    keep_bg_count += 1
-            except Exception as e:
-                elem.processing_notes.append(f"Failed: {str(e)}")
-                self._log(f"Element {elem.id} failed: {e}")
-        
-        self._log(f"Done: {processed_count}/{len(elements_to_process)} (RMBG:{rmbg_count}, keep_bg:{keep_bg_count})")
-        
+
+        # Process keep-bg elements (parallel CPU)
+        if keepbg_elements:
+            self._log(f"  Processing {len(keepbg_elements)} crop-only elements...")
+            if len(keepbg_elements) >= 8:
+                p_count, k_count = self._process_parallel_keepbg(keepbg_elements, original_image)
+                processed_count += p_count
+                keep_bg_count += k_count
+            else:
+                for elem in keepbg_elements:
+                    try:
+                        self._process_element_keepbg(elem, original_image)
+                        processed_count += 1
+                        keep_bg_count += 1
+                    except Exception as e:
+                        elem.processing_notes.append(f"Failed: {str(e)}")
+
+        self._log(f"Done: {processed_count}/{total} (RMBG:{rmbg_count}, keep_bg:{keep_bg_count})")
+
         return ProcessingResult(
             success=True,
             elements=context.elements,
@@ -308,12 +403,12 @@ class IconPictureProcessor(BaseProcessor):
             canvas_height=context.canvas_height,
             metadata={
                 'processed_count': processed_count,
-                'total_to_process': len(elements_to_process),
+                'total_to_process': total,
                 'rmbg_count': rmbg_count,
                 'keep_bg_count': keep_bg_count
             }
         )
-    
+
     def _get_elements_to_process(self, elements: List[ElementInfo]) -> List[ElementInfo]:
         """Filter elements to process (icons, arrows, etc.; arrows treated as icon crop)."""
         all_types = set(IMAGE_PROMPT) | {"arrow", "line", "connector"}
@@ -322,37 +417,92 @@ class IconPictureProcessor(BaseProcessor):
             if e.element_type.lower() in all_types and e.base64 is None
         ]
     
-    def _process_element(self, elem: ElementInfo, original_image: Image.Image) -> bool:
-        """Process one element. Returns True if RMBG was used."""
-        elem_type = elem.element_type.lower()
-        
-        # Crop (shrink_margin: positive = shrink in)
-        shrink_margin = 0
+    def _crop_element(self, elem: ElementInfo, original_image: Image.Image) -> Image.Image:
+        """Crop element from original image. Returns cropped PIL image."""
         img_w, img_h = original_image.size
-        
-        # Shrink bounds
+
+        # Shrink bounds (margin = 0 for now)
         orig_w = elem.bbox.x2 - elem.bbox.x1
         orig_h = elem.bbox.y2 - elem.bbox.y1
-        # Cap shrink to 10% of size
+        shrink_margin = 0
         max_shrink = min(orig_w * 0.1, orig_h * 0.1, shrink_margin)
         actual_shrink = int(max_shrink)
-        
+
         x1 = max(0, elem.bbox.x1 + actual_shrink)
         y1 = max(0, elem.bbox.y1 + actual_shrink)
         x2 = min(img_w, elem.bbox.x2 - actual_shrink)
         y2 = min(img_h, elem.bbox.y2 - actual_shrink)
-        
+
         # Ensure valid crop
         if x2 <= x1 or y2 <= y1:
-            # Fallback to original bounds
             x1, y1 = elem.bbox.x1, elem.bbox.y1
             x2, y2 = elem.bbox.x2, elem.bbox.y2
-        
-        cropped = original_image.crop((x1, y1, x2, y2))
+
+        return original_image.crop((x1, y1, x2, y2)), (x1, y1, x2, y2)
+
+    def _finalize_element(self, elem: ElementInfo, processed_img: Image.Image, bbox_coords: tuple):
+        """Finalize element: set base64, update bbox, generate XML."""
+        x1, y1, x2, y2 = bbox_coords
+
+        # Update bbox
+        elem.bbox.x1 = x1
+        elem.bbox.y1 = y1
+        elem.bbox.x2 = x2
+        elem.bbox.y2 = y2
+
+        # Generate XML
+        self._generate_xml(elem)
+
+        elem.processing_notes.append("IconPictureProcessor done")
+
+    def _process_element_keepbg(self, elem: ElementInfo, original_image: Image.Image):
+        """Process element without RMBG (crop only)."""
+        cropped, bbox_coords = self._crop_element(elem, original_image)
+        processed = cropped.convert("RGBA")
+        elem.has_transparency = False
+        elem.base64 = self._image_to_base64(processed)
+        self._finalize_element(elem, processed, bbox_coords)
+
+    def _process_parallel_keepbg(self, elements: List[ElementInfo], original_image: Image.Image) -> tuple:
+        """Process keep-bg elements in parallel using thread pool."""
+        processed = 0
+        keep_bg_count = 0
+
+        def process_one(args):
+            idx, elem = args
+            try:
+                self._process_element_keepbg(elem, original_image)
+                return (True, None)
+            except Exception as e:
+                elem.processing_notes.append(f"Failed: {str(e)}")
+                return (False, str(e))
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(process_one, (i, elem)): i
+                for i, elem in enumerate(elements)
+            }
+
+            for future in as_completed(futures):
+                i = futures[future]
+                success, error = future.result()
+                if success:
+                    processed += 1
+                    keep_bg_count += 1
+                else:
+                    self._log(f"Element failed: {error}")
+
+                if processed > 0 and processed % 5 == 0:
+                    self._log(f"  Progress: {processed}/{len(elements)} elements...")
+
+        return processed, keep_bg_count
+
+    def _process_element(self, elem: ElementInfo, original_image: Image.Image) -> bool:
+        """Process one element. Returns True if RMBG was used. (Legacy single-mode)."""
+        elem_type = elem.element_type.lower()
+        cropped, bbox_coords = self._crop_element(elem, original_image)
 
         is_rmbg = False
-        
-        # RMBG or keep background by type
         if elem_type in self.RMBG_TYPES:
             processed = self._rmbg_model.remove_background(cropped)
             elem.has_transparency = True
@@ -360,21 +510,11 @@ class IconPictureProcessor(BaseProcessor):
         else:
             processed = cropped.convert("RGBA")
             elem.has_transparency = False
-        
-        # To base64
+
         elem.base64 = self._image_to_base64(processed)
-        
-        # Update bbox for padding
-        elem.bbox.x1 = x1
-        elem.bbox.y1 = y1
-        elem.bbox.x2 = x2
-        elem.bbox.y2 = y2
-        
-        # XML fragment
-        self._generate_xml(elem)
-        
-        elem.processing_notes.append(f"IconPictureProcessor done (RMBG={is_rmbg})")
-        
+        self._finalize_element(elem, processed, bbox_coords)
+        elem.processing_notes[-1] = f"IconPictureProcessor done (RMBG={is_rmbg})"
+
         return is_rmbg
     
     def _generate_xml(self, elem: ElementInfo):
@@ -404,9 +544,9 @@ class IconPictureProcessor(BaseProcessor):
         elem.layer_level = LayerLevel.IMAGE.value
     
     def _image_to_base64(self, image: Image.Image) -> str:
-        """Encode PIL image to base64."""
+        """Encode PIL image to base64 (fast compression)."""
         buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
+        image.save(buffer, format="PNG", compress_level=1)  # fast compression
         buffer.seek(0)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 

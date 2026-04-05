@@ -66,7 +66,7 @@ class TextRestorer:
             if self._ocr_engine == "paddleocr":
                 try:
                     from .ocr.paddle_ocr import PaddleOCRAdapter
-                    self._layout_ocr = PaddleOCRAdapter()
+                    self._layout_ocr = PaddleOCRAdapter(use_gpu=True)
                 except Exception as e:
                     import warnings
                     warnings.warn(

@@ -28,13 +28,13 @@ class PaddleOCRAdapter:
     Requires: paddleocr, paddlepaddle (or paddlepaddle-gpu).
     """
 
-    def __init__(self, use_angle_cls: bool = True, lang: str = "ch"):
+    def __init__(self, use_angle_cls: bool = True, lang: str = "ch", use_gpu: bool = True):
         if PaddleOCR is None:
             raise ImportError(
                 "Install PaddleOCR: pip install paddleocr paddlepaddle (or paddlepaddle-gpu)"
             )
         try:
-            self._engine = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang)
+            self._engine = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang, use_gpu=use_gpu)
         except AttributeError as e:
             if "set_optimization_level" in str(e):
                 raise RuntimeError(
