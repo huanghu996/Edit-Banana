@@ -1,21 +1,39 @@
-# Pipeline & optional web backend
-pyyaml
-opencv-python-headless
-Pillow
-scikit-image
-requests
-fastapi
-uvicorn[standard]
+# Python 3.12.0
+#
+# Install core dependencies:
+#   pip install -r requirements.txt
+#
+# PyTorch (CUDA 11.8) and SAM3 must be installed separately — see README.
+#   pip install torch==2.7.1+cu118 torchvision==0.22.1+cu118 --index-url https://download.pytorch.org/whl/cu118
 
-# Text OCR (local, default)
-pytesseract
+# ── Pipeline & web backend ────────────────────────────────────────────────────
+numpy==1.26.4
+PyYAML==6.0.2
+opencv-python-headless==4.9.0.80
+Pillow==12.1.1
+scikit-image==0.26.0
+requests==2.33.1
+fastapi==0.135.3
+uvicorn[standard]==0.43.0
+python-multipart==0.0.22
+starlette==1.0.0
+anyio==4.12.1
+httpx==0.28.1
 
-# Optional: PaddleOCR (better for 中英文混排). Set ocr.engine: "paddleocr" in config.
-# Use PaddlePaddle 3.2.2 + PaddleOCR 3.x (3.3.0+ has CPU oneDNN bug, will fallback to Tesseract):
-#   pip install paddlepaddle==3.2.2 paddleocr   # or paddlepaddle-gpu==3.2.2
+# ── Text OCR ─────────────────────────────────────────────────────────────────
+# Default: Tesseract (requires system package: apt install tesseract-ocr)
+pytesseract==0.3.13
 
-# Optional: formula recognition (LaTeX). Install for full text pipeline.
-# pip install pix2text   # and onnxruntime or onnxruntime-gpu for GPU
-# Optional: background removal (RMBG). Install for IconPictureProcessor.
-# pip install onnxruntime  # or onnxruntime-gpu
-# PyTorch and SAM3: install separately; see README (PyTorch + SAM3 source).
+# Optional: PaddleOCR — better for mixed Chinese/English.
+#   Set ocr.engine: "paddleocr" in config/config.yaml to enable.
+paddlepaddle==3.2.2
+paddleocr==3.4.0
+
+# ── Formula recognition (LaTeX) ───────────────────────────────────────────────
+# Optional: set text.formula: true in config to enable.
+pix2text==1.1.6
+
+# ── ONNX runtime (background removal / RMBG) ─────────────────────────────────
+# Use onnxruntime for CPU-only, onnxruntime-gpu for GPU.
+onnxruntime==1.24.4
+# onnxruntime-gpu==1.24.4
