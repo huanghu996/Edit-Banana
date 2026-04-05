@@ -3,7 +3,7 @@
 FastAPI Backend Server — web service entry for Edit Banana.
 
 Provides upload and conversion API. Run with: python server_pa.py
-Server runs at http://localhost:8000
+Server runs at http://localhost:8081
 """
 
 import os
@@ -14,6 +14,8 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 app = FastAPI(
@@ -21,6 +23,9 @@ app = FastAPI(
     description="Image to editable DrawIO (XML) — upload a diagram image, get DrawIO XML.",
     version="1.0.0",
 )
+
+_static_dir = os.path.join(PROJECT_ROOT, "static")
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 @app.get("/health")
@@ -30,7 +35,7 @@ def health():
 
 @app.get("/")
 def root():
-    return {"service": "Edit Banana", "docs": "/docs"}
+    return FileResponse(os.path.join(_static_dir, "index.html"))
 
 
 @app.post("/convert")
@@ -69,7 +74,12 @@ async def convert(file: UploadFile = File(...)):
             )
             if not result_path or not os.path.exists(result_path):
                 raise HTTPException(500, "Conversion failed")
-            return {"success": True, "output_path": result_path}
+            out_name = Path(name).stem + ".xml"
+            return FileResponse(
+                result_path,
+                media_type="application/xml",
+                filename=out_name,
+            )
         finally:
             try:
                 os.unlink(tmp_path)
@@ -82,7 +92,7 @@ async def convert(file: UploadFile = File(...)):
 
 
 def main():
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8081)
 
 
 if __name__ == "__main__":

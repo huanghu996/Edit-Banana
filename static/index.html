@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edit Banana — Image to DrawIO</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3350;
+      --yellow: #f5c542;
+      --yellow-dim: #c9a030;
+      --text: #e8eaf0;
+      --text-muted: #7a7f9a;
+      --green: #4caf82;
+      --red: #e05c6a;
+      --radius: 14px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      width: 100%;
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .logo span { color: var(--yellow); }
+
+    .badge {
+      font-size: 11px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+
+    main {
+      width: 100%;
+      max-width: 860px;
+      padding: 48px 24px 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      line-height: 1.2;
+    }
+    h1 em { color: var(--yellow); font-style: normal; }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+      margin-top: 8px;
+    }
+
+    /* Drop zone */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 56px 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .drop-zone.drag-over {
+      border-color: var(--yellow);
+      background: #1f2133;
+    }
+    .drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .drop-icon {
+      width: 56px;
+      height: 56px;
+      background: var(--surface2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+    }
+
+    .drop-text { font-size: 15px; color: var(--text-muted); text-align: center; }
+    .drop-text strong { color: var(--text); }
+    .drop-formats { font-size: 12px; color: var(--text-muted); }
+
+    /* Preview + actions row */
+    .preview-row {
+      display: none;
+      gap: 24px;
+      align-items: flex-start;
+    }
+    .preview-row.visible { display: flex; }
+
+    .preview-card {
+      flex: 0 0 200px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .preview-card img {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      display: block;
+    }
+    .preview-card .preview-name {
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-top: 1px solid var(--border);
+    }
+
+    .action-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .file-info {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .file-info .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .file-info .value { font-size: 14px; font-weight: 500; word-break: break-all; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn-primary { background: var(--yellow); color: #1a1400; }
+    .btn-primary:hover:not(:disabled) { background: #f0b800; }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 13px;
+      padding: 8px 16px;
+    }
+    .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
+    .btn-download { background: var(--green); color: #fff; }
+    .btn-download:hover { background: #3d9e6e; }
+
+    /* Progress */
+    .progress-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .progress-wrap.visible { display: flex; }
+    .progress-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    .progress-bar-bg {
+      height: 6px;
+      background: var(--surface2);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--yellow);
+      border-radius: 99px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .progress-bar.indeterminate {
+      width: 40%;
+      animation: slide 1.2s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0%   { margin-left: -40%; }
+      100% { margin-left: 100%; }
+    }
+
+    /* Result */
+    .result-card {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .result-card.visible { display: block; }
+    .result-header {
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .result-header .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+    .dot.success { background: var(--green); }
+    .dot.error   { background: var(--red); }
+    .result-body {
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .xml-preview {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      color: #a8b0d0;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .result-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    /* Error state */
+    .error-msg {
+      background: #2a1219;
+      border: 1px solid #5a2030;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #f48c99;
+      white-space: pre-wrap;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .preview-row { flex-direction: column; }
+      .preview-card { flex: unset; width: 100%; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Edit<span>Banana</span></div>
+  <span class="badge">v1.0</span>
+</header>
+
+<main>
+  <div>
+    <h1>Turn diagrams into <em>editable</em> DrawIO</h1>
+    <p class="subtitle">Upload a diagram image — get back fully editable DrawIO XML in seconds.</p>
+  </div>
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.bmp,.tiff,.webp" />
+    <div class="drop-icon">🍌</div>
+    <div class="drop-text"><strong>Drop your image here</strong><br>or click to browse</div>
+    <div class="drop-formats">PNG · JPG · BMP · TIFF · WebP</div>
+  </div>
+
+  <!-- Preview + actions (shown after file selected) -->
+  <div class="preview-row" id="previewRow">
+    <div class="preview-card">
+      <img id="previewImg" src="" alt="Preview" />
+      <div class="preview-name" id="previewName"></div>
+    </div>
+    <div class="action-panel">
+      <div class="file-info">
+        <div class="label">File</div>
+        <div class="value" id="infoName">—</div>
+      </div>
+      <div class="file-info">
+        <div class="label">Size</div>
+        <div class="value" id="infoSize">—</div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="convertBtn">Convert to DrawIO</button>
+        <button class="btn btn-ghost" id="clearBtn">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-label">
+      <span id="progressLabel">Converting…</span>
+    </div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar indeterminate" id="progressBar"></div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  <div class="result-card" id="resultCard">
+    <div class="result-header">
+      <div class="status" id="resultStatus">
+        <div class="dot success" id="resultDot"></div>
+        <span id="resultTitle">Conversion complete</span>
+      </div>
+    </div>
+    <div class="result-body" id="resultBody"></div>
+  </div>
+</main>
+
+<script>
+  const dropZone    = document.getElementById('dropZone');
+  const fileInput   = document.getElementById('fileInput');
+  const previewRow  = document.getElementById('previewRow');
+  const previewImg  = document.getElementById('previewImg');
+  const previewName = document.getElementById('previewName');
+  const infoName    = document.getElementById('infoName');
+  const infoSize    = document.getElementById('infoSize');
+  const convertBtn  = document.getElementById('convertBtn');
+  const clearBtn    = document.getElementById('clearBtn');
+  const progressWrap = document.getElementById('progressWrap');
+  const progressBar  = document.getElementById('progressBar');
+  const progressLabel = document.getElementById('progressLabel');
+  const resultCard  = document.getElementById('resultCard');
+  const resultStatus = document.getElementById('resultStatus');
+  const resultDot   = document.getElementById('resultDot');
+  const resultTitle = document.getElementById('resultTitle');
+  const resultBody  = document.getElementById('resultBody');
+
+  let selectedFile = null;
+  let resultBlob = null;
+  let resultFilename = 'output.xml';
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  function setFile(file) {
+    selectedFile = file;
+    const url = URL.createObjectURL(file);
+    previewImg.src = url;
+    previewName.textContent = file.name;
+    infoName.textContent = file.name;
+    infoSize.textContent = formatBytes(file.size);
+    previewRow.classList.add('visible');
+    progressWrap.classList.remove('visible');
+    resultCard.classList.remove('visible');
+    resultBlob = null;
+  }
+
+  function clearAll() {
+    selectedFile = null;
+    resultBlob = null;
+    fileInput.value = '';
+    previewRow.classList.remove('visible');
+    progressWrap.classList.remove('visible');
+    resultCard.classList.remove('visible');
+  }
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setFile(fileInput.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) setFile(file);
+  });
+
+  clearBtn.addEventListener('click', clearAll);
+
+  convertBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+
+    convertBtn.disabled = true;
+    progressWrap.classList.add('visible');
+    progressBar.classList.add('indeterminate');
+    progressLabel.textContent = 'Uploading and converting…';
+    resultCard.classList.remove('visible');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const res = await fetch('/convert', { method: 'POST', body: formData });
+
+      progressBar.classList.remove('indeterminate');
+      progressBar.style.width = '100%';
+
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try { const j = await res.json(); errMsg = j.detail || JSON.stringify(j); } catch {}
+        showError(errMsg);
+        return;
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('xml') || contentType.includes('octet-stream')) {
+        // File download response
+        resultBlob = await res.blob();
+        const disposition = res.headers.get('content-disposition') || '';
+        const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (match) resultFilename = match[1].replace(/['"]/g, '');
+        else resultFilename = selectedFile.name.replace(/\.[^.]+$/, '') + '.xml';
+        const text = await resultBlob.text();
+        showSuccess(text);
+      } else {
+        // JSON response with output_path
+        const json = await res.json();
+        resultBlob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+        resultFilename = selectedFile.name.replace(/\.[^.]+$/, '') + '_result.json';
+        showSuccess(JSON.stringify(json, null, 2));
+      }
+    } catch (err) {
+      progressBar.classList.remove('indeterminate');
+      showError(err.message || 'Network error');
+    } finally {
+      convertBtn.disabled = false;
+    }
+  });
+
+  function showSuccess(text) {
+    progressWrap.classList.remove('visible');
+    resultDot.className = 'dot success';
+    resultTitle.textContent = 'Conversion complete';
+    resultBody.innerHTML = '';
+
+    const preview = document.createElement('div');
+    preview.className = 'xml-preview';
+    preview.textContent = text.slice(0, 2000) + (text.length > 2000 ? '\n…(truncated)' : '');
+    resultBody.appendChild(preview);
+
+    const actions = document.createElement('div');
+    actions.className = 'result-actions';
+
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'btn btn-download';
+    dlBtn.innerHTML = '⬇ Download XML';
+    dlBtn.addEventListener('click', () => {
+      const url = URL.createObjectURL(resultBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = resultFilename;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    actions.appendChild(dlBtn);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn btn-ghost';
+    copyBtn.textContent = 'Copy to clipboard';
+    copyBtn.addEventListener('click', () => {
+      resultBlob.text().then(t => {
+        navigator.clipboard.writeText(t).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => copyBtn.textContent = 'Copy to clipboard', 2000);
+        });
+      });
+    });
+    actions.appendChild(copyBtn);
+
+    resultBody.appendChild(actions);
+    resultCard.classList.add('visible');
+  }
+
+  function showError(msg) {
+    progressWrap.classList.remove('visible');
+    resultDot.className = 'dot error';
+    resultTitle.textContent = 'Conversion failed';
+    resultBody.innerHTML = `<div class="error-msg">${escapeHtml(msg)}</div>`;
+    resultCard.classList.add('visible');
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+
+</body>
+</html>

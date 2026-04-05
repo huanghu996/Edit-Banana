@@ -1,0 +1,16 @@
+[Unit]
+Description=Edit Banana FastAPI Server
+After=network.target
+
+[Service]
+Type=simple
+User=hugh
+WorkingDirectory=/home/hugh/Edit-Banana
+ExecStart=/home/hugh/anaconda3/envs/editbanana/bin/python /home/hugh/Edit-Banana/server_pa.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
