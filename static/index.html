@@ -199,6 +199,8 @@
     .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
     .btn-download { background: var(--green); color: #fff; }
     .btn-download:hover { background: #3d9e6e; }
+    .btn-drawio { background: #1565c0; color: #fff; }
+    .btn-drawio:hover { background: #0d47a1; }
 
     /* Progress */
     .progress-wrap {
@@ -303,6 +305,7 @@
       h1 { font-size: 24px; }
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/pako@2/dist/pako_deflate.min.js"></script>
 </head>
 <body>
 
@@ -485,6 +488,24 @@
     }
   });
 
+  function openInDrawio(xmlText) {
+    try {
+      // draw.io encoding: encodeURIComponent the XML first, then deflateRaw, then base64
+      // This matches draw.io's Graph.compress() / Graph.decompress() format exactly.
+      const compressed = pako.deflateRaw(encodeURIComponent(xmlText));
+      let binaryStr = '';
+      for (let i = 0; i < compressed.length; i++) {
+        binaryStr += String.fromCharCode(compressed[i]);
+      }
+      const encoded = btoa(binaryStr);
+      // 'R' prefix = raw inline data. Without it draw.io treats the fragment as a URL
+      // and routes it through their proxy service (which fails on intranets).
+      window.open('https://app.diagrams.net/#R' + encoded, '_blank');
+    } catch (e) {
+      alert('Failed to open in draw.io: ' + e.message);
+    }
+  }
+
   function showSuccess(text) {
     progressWrap.classList.remove('visible');
     resultDot.className = 'dot success';
@@ -511,6 +532,14 @@
       URL.revokeObjectURL(url);
     });
     actions.appendChild(dlBtn);
+
+    if (text.trim().startsWith('<')) {
+      const drawioBtn = document.createElement('button');
+      drawioBtn.className = 'btn btn-drawio';
+      drawioBtn.innerHTML = '✎ Open in draw.io';
+      drawioBtn.addEventListener('click', () => openInDrawio(text));
+      actions.appendChild(drawioBtn);
+    }
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'btn btn-ghost';
