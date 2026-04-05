@@ -1,7 +1,6 @@
 # Pipeline & optional web backend
 pyyaml
 opencv-python-headless
-numpy
 Pillow
 scikit-image
 requests
